@@ -1,1 +1,51 @@
 data/*
+
+.cache
+.venv/
+
+# Dropbox
+dropbox.txt
+dropbox_upload.py
+
+# IDE files
+metastore/
+.iml
+*/target/
+.vs
+.vscode
+.idea
+.project
+.code-workspace
+.cfg
+env/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# binary files
+*.so
+*.pyc
+*.pyo
+*.pyd
+
+# temporary files
+*~
+*#
+*.bak
+*.swp
+*.orig
+*flymake.py
+*.ipynb_checkpoints/
+
+# setuptools files
+/.eggs/
+*.egg-info
+
+# pytest
+.pytest_cache/
