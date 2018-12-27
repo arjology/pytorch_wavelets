@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 from tqdm import trange
 import pandas as pd
+from typing import Iterable, Tuple
 
 import torch
 import torch.nn as nn
@@ -19,22 +20,41 @@ print("*** Device: {}".format(device))
 # --------------------------------------------------
 # Loading and normalizing CIFAR10
 
-transform = transforms.Compose(
-    [transforms.ToTensor(),
-     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+def load_data(batch_size: int=3,
+	      data_root: Path=Path("./"),
+	      normalization: Tuple=(0.5, 0.5, 0.5),
+              num_workers: int=2,
+	      shuffle: bool=True,
+              load_training: bool=True,
+	      load_testing: bool=True		
+	)
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                        download=True, transform=transform)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=4,
-                                          shuffle=True, num_workers=2)
+    transform = transforms.Compose(
+	[transforms.ToTensor(),
+	 transforms.Normalize(normalization, normalization)])
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                       download=True, transform=transform)
-testloader = torch.utils.data.DataLoader(testset, batch_size=4,
-                                         shuffle=False, num_workers=2)
+    trainloader = None
+    testloader = None
+    if load_training:
+	trainset = torchvision.datasets.CIFAR10(root=data_root, train=True, 
+					    download=True, transform=transform) 
 
-classes = ('plane', 'car', 'bird', 'cat',
-           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+	trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, 
+					    shuffle=shuffle, num_workers=num_workers) 
+	
+	testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+					       download=True, transform=transform)
+	testloader = torch.utils.data.DataLoader(testset, batch_size=8,
+						 shuffle=False, num_workers=2)
+
+    classes = ('plane', 'car', 'bird', 'cat',
+	       'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    datasets = []
+    if trainloader:
+        datasets.append(trainloader)
+    if testloader:
+	datasets.append(testloader)
 
 # functions to show an image
 def imshow(img):
@@ -55,8 +75,11 @@ images, labels = dataiter.next()
 # --------------------------------------------------
 # Define a Convolutional Neural Network
 
-net = Net()
-net.to(device)
+gpu = True
+net = Net(gpu=gpu)
+net.zero_grad()
+if gpu:
+    net.to(device)
 
 # --------------------------------------------------
 # Define a Loss function and optimizer
@@ -67,9 +90,10 @@ optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 # --------------------------------------------------
 # Train the network
 
+training_update_freq= 100
 def train(n_epochs: int=2, save: bool=False):
     print("*** Beginning training at {} with {} epochs".format(datetime.now(), n_epochs))
-    data = [] 
+    save_data = [] 
     
     with trange(n_epochs) as t:
         for epoch in t:  # loop over the dataset multiple times
@@ -87,24 +111,33 @@ def train(n_epochs: int=2, save: bool=False):
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
+                torch.cuda.synchronize()
 
                 # print statistics
                 running_loss += loss.item()
-
-                if i % 100 == 99:    # print every 2000 mini-batches
+                # print every `training_update_freq` mini-batches
+                if i % training_update_freq == training_update_freq:   
+                    t.set_description('Epoch {}'.format(epoch + 1))                 
+                    t.set_postfix(loss=running_loss/training_update_freq, gen=i+1)
                     if save:
-                        data.append([epoch, i, running_loss/2000])
-                    t.set_description('Epoch {}'.format(epoch + 1))
-                    t.set_postfix(loss=running_loss/2000, gen=i+1)
-                    running_loss = 0.0
-        print('*** Finished training...')
-        return data
+                        save_data.append(pd.DataFrame(
+                                            columns=('epoch', 'generation', 'loss'), 
+                                            data=[[epoch, i, running_loss/training_update_freq]]
+                                        ))
+                    running_loss = 0
+              
+        print('*** Finished training at {}'.format(datetime.now()))
+        if save and len(save_data)>1:
+            df = pd.concat(save_data,ignore_index=True)
+            df.to_csv("./Net_{}_epochs.csv".format(n_epochs))
 
 # --------------------------------------------------
 # Test the network on the test data
 
-def test():
+def test(save: bool=False, logfile: str="default.txt"):
     print("*** Testing network on test data...")
+    if save:
+        stats = open(logfile,'w')
 
     dataiter = iter(testloader)
     images, labels = dataiter.next()
@@ -116,8 +149,15 @@ def test():
     outputs = net(images)
     _, predicted = torch.max(outputs, 1)
 
-    print('Predicted: ', ' '.join('%5s' % classes[predicted[j]]))
-    print('GroundTruth: ', ' '.join('%5s' % classes[labels[j]] for j in range(4) for j in range(4)))
+    pred_txt = "Predicted:\t" + " ".join('%5s' % classes[predicted[j]] for j in range(4) for j in range(4)) + "\n"
+    truth_txt = "Ground Truth:\t" + " ".join('%5s' % classes[labels[j]] for j in range(4) for j in range(4)) + "\n"
+    print(pred_txt)
+    print(truth_txt)
+    if save:
+       header = "Testing results [{}] {}\n{}\n\n".format(logfile, datetime.now(), ''.join(['=']*120))
+       stats.write(header)
+       stats.write(pred_txt)
+       stats.write(truth_txt)
 
     correct = 0
     total = 0
@@ -130,8 +170,11 @@ def test():
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-    print('Accuracy of the network on the 10000 test images: %d %%' % (
-        100 * correct / total))
+    accuracy = 'Accuracy of the network on the 10000 test images: %d %%\n' % (
+        100 * correct / total)
+    print(accuracy)
+    if save:
+        stats.write(accuracy)
 
     class_correct = list(0. for i in range(10))
     class_total = list(0. for i in range(10))
@@ -149,17 +192,55 @@ def test():
 
 
     for i in range(10):
-        print('Accuracy of %5s : %2d %%' % (
-            classes[i], 100 * class_correct[i] / class_total[i]))
+        col_accuracy = 'Accuracy of %5s\t: %2d %%\n' % (
+            classes[i], 100 * class_correct[i] / class_total[i])
+        print(col_accuracy)
+        if save:
+            stats.write(col_accuracy)
+
+    stats.close()
 
 
-def main():
-    n_epochs=500
-    data = train(n_epochs=n_epochs, save=True)
-    df = pd.DataFrame(columns=('epoch','generation','running_loss'), data=np.array(data))
-    df.to_csv("./Net_{}_epochs.csv".format(n_epochs))
-    test()
+# --------------------------------------------------
+# Parse arguments
 
+def parse_global_args(argvs):
+    # Parse "global" arguments
+    parser = argparse.ArgumentParser(description=main.__doc__,
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     add_help=False)
+    group = parser.add_argument_group("optional arguments")
+    group.add_argument("-h", "--help", action="help",
+                       help="Show this help message and exit.")
+    group.add_argument("-e", "--epochs", dest="epochs", type=int,
+			help="Number of epochs used in training.")
+    group.add_argument("-b", "--batch_size", dest="batch_size",
+			help="Training batch size.", type=int)
+    group.add_argument("--train", dest="train", type=bool,
+			help="Train network.")
+    group.add_argument("--test", dest="test", type=bool,
+			help="Test network.")
+    group.add_argument("-o", "--output", dest="output", type=str,
+                       help="Location to save training performance as CSV.")
+    group.add_argument("-l", "--logging", dest="logging", type=str,
+			help="Location to save logging data.")
+
+# --------------------------------------------------
+# Main function
+
+def main(argv: Iterable[object]=None):
+    """Train and/or test image CIFAR10 classification with PyTorch and Kymatio"""
+
+    # Parse "global" arguments
+    common_args = parse_precon_global_args(argvs)
+ 
+    n_epochs=1
+    log = "./Net_{}_epochs.log".format(n_epochs)
+    train(n_epochs=n_epochs, save=True)
+    test(True, log)
+
+
+def run(batch_size: int=3, 
 
 if __name__ == "__main__":
     main()

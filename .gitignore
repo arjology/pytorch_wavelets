@@ -1,4 +1,6 @@
 data/*
+*.log
+*.csv
 
 .cache
 .venv/

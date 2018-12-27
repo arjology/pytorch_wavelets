@@ -10,8 +10,23 @@ def conv3x3(in_planes, out_planes, stride=1):
                      padding=1, bias=False)
 
 class Net(nn.Module): 
-    def __init__(self): 
+    def __init__(self, gpu: bool=True):
+        # 1 input image channel, 6 output channels, 5x5 square convolution kernel
         super().__init__() 
+
+        # Wavelet transform
+        J = 1
+        L = 8
+        M = 32
+        N = 32
+        self.scattering = Scattering2D(J=J, shape=(M, N), L=L)
+        if gpu:
+            self.scattering.cuda()
+            
+        self.w_conv1 = nn.Conv2d(9, 6, 3)
+        self.w_conv2 = nn.Conv2d(6, 16 ,3)
+        self.w_fc1 = nn.Linear(12*16, 120)
+
         self.conv1 = nn.Conv2d(3, 6, 5)
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 16, 5)        
@@ -21,14 +36,25 @@ class Net(nn.Module):
         self.fc3 = nn.Linear(84, 10)
 
     def forward(self,x ): 
-        # Max pooling over a (2,2) window 
+        # Max pooling over a (2,2) window
+
+        Sx = self.scattering(x)
+        Sx_n = len(Sx)
+        Sx_cat = torch.cat([Sx[i] for i in range(Sx_n)])
+        z = self.pool(F.relu(self.w_conv1(Sx_cat)))
+        z = self.pool(F.relu(self.w_conv2(z)))
+        z = z.view(-1, 12*16)
+        z = F.relu(self.w_fc1(z))
+        z = F.relu(self.fc2(z))
+        z = self.fc3(z)
+
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = x.view(-1, 16 * 5 * 5)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
-        return x
+        return (x+z)/2
 
     def num_flat_features(self, x): 
         size = x.size()[1:] # all dimensions except the batch dimension 
@@ -36,40 +62,3 @@ class Net(nn.Module):
         for s in size: 
             num_features *= s 
         return num_features
-
-
-class BasicBlock(nn.Module):
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-
-        super().__init__()
-        
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.relu = nn.ReLU(inplace=True)
-
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
-
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x):
-        residual = x
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample:
-            residual = self.downsample(x)
-
-        out += residual
-        out = self.relu(out)
-
-        return out
-
-    
